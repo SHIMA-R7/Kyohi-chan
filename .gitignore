@@ -1,0 +1,31 @@
+# Pythonが自動生成する不要なファイル
+__pycache__/
+*.pyc
+
+# Pythonの仮想環境（環境に合わせてどちらか、または両方）
+venv/
+.venv/
+env/
+
+# 環境変数（APIキーなどが載っている大事なファイル。GitHubに上げないため）
+.env
+
+# SQLiteのデータベースファイル（Render移行時に分けるため、一旦ローカルのみに）
+*.db
+*.sqlite3
+
+# Botの動作ログや自動生成されたテキストを無視
+tweet_log.txt
+*.txt
+
+# 状態管理のJSONファイルを無視（もし手元だけで管理したい場合）
+bot_state.json
+eru_count.json
+reposted.json
+repost_liked.json
+
+# フォルダごと無視したい場合（例：画像などを溜めるフォルダがあるなら）
+# フォルダ名が「images」なら以下のように書きます
+# images/
+chrome_profile/
+LLL-Tweet/

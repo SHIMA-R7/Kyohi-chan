@@ -394,6 +394,19 @@ def _reschedule_repost():
 # ───────────────────────────────────────
 
 def main():
+
+    # daremo_eru.pyを別プロセスで自動起動
+    import subprocess, sys
+    daremo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "daremo_eru.py")
+    if os.path.exists(daremo_path):
+        subprocess.Popen([sys.executable, daremo_path])
+        logger.info("🌐 daremo_eru.py を起動しました")
+    else:
+        logger.warning(f"daremo_eru.py が見つかりません: {daremo_path}")
+
+    logger.info("🚀 自動ツイートスケジューラー起動（統合版）")
+    # ... 以下既存のコード
+    
     logger.info("🚀 自動ツイートスケジューラー起動（統合版）")
 
     # えるえる毎朝登録

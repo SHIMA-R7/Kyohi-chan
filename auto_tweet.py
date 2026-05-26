@@ -345,9 +345,24 @@ def repost_job():
 
             tweet_id   = tweet.get("id_str", tweet.get("id", ""))
             raw_text   = tweet.get("full_text", tweet.get("text", ""))
-            original_url = f"https://x.com/i/web/status/{tweet_id}"
-            tweet_text = f"【L³ポスト復刻】{_clean_text(raw_text)}\n{original_url}"
             likes      = tweet.get("favorite_count", "?")
+
+            # 引用RTの元ツイートURLを抽出（entities.urlsの展開先から）
+            quoted_url = None
+            urls = tweet.get("entities", {}).get("urls", [])
+            for u in urls:
+                expanded = u.get("expanded_url", "")
+                if "/status/" in expanded and "twitter.com" in expanded or "x.com" in expanded:
+                    # 自分自身のツイートURLでなければ引用元とみなす
+                    if tweet_id not in expanded:
+                        quoted_url = expanded
+                        break
+
+            base_text = _clean_text(raw_text)
+            if quoted_url:
+                tweet_text = f"{base_text} #復刻\n{quoted_url}"
+            else:
+                tweet_text = f"{base_text} #復刻"
 
             if _has_media(tweet):
                 image_paths = _get_image_paths(tweet)
@@ -394,19 +409,6 @@ def _reschedule_repost():
 # ───────────────────────────────────────
 
 def main():
-
-    # daremo_eru.pyを別プロセスで自動起動
-    import subprocess, sys
-    daremo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "daremo_eru.py")
-    if os.path.exists(daremo_path):
-        subprocess.Popen([sys.executable, daremo_path])
-        logger.info("🌐 daremo_eru.py を起動しました")
-    else:
-        logger.warning(f"daremo_eru.py が見つかりません: {daremo_path}")
-
-    logger.info("🚀 自動ツイートスケジューラー起動（統合版）")
-    # ... 以下既存のコード
-    
     logger.info("🚀 自動ツイートスケジューラー起動（統合版）")
 
     # えるえる毎朝登録

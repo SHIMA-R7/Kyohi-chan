@@ -7,7 +7,6 @@ import os
 import time
 import random
 import logging
-import pyperclip
 from dotenv import load_dotenv
 from selenium import webdriver
 from selenium.webdriver.common.by import By
@@ -31,17 +30,15 @@ def _human_wait(min_sec=0.5, max_sec=2.0):
     time.sleep(random.uniform(min_sec, max_sec))
 
 
-def _paste_text(element, text: str):
-    """クリップボード経由でテキストをペースト"""
-    pyperclip.copy(text)
-    element.click()
-    _human_wait(0.3, 0.7)
-    element.send_keys(Keys.CONTROL, 'v')
-    _human_wait(0.3, 0.7)
+def _human_type(element, text: str):
+    """1文字ずつランダム間隔でタイピング"""
+    for char in text:
+        element.send_keys(char)
+        time.sleep(random.uniform(0.05, 0.18))
 
 
 def _human_scroll(driver, times=3):
-    """ランダムスクロール"""
+    """ランダムスクロール（ActionChainsは使わない）"""
     for _ in range(times):
         scroll_px = random.randint(100, 400)
         driver.execute_script(f"window.scrollBy(0, {scroll_px});")
@@ -72,7 +69,7 @@ def _login(driver: webdriver.Firefox, wait: WebDriverWait):
 
     el = wait.until(EC.element_to_be_clickable((By.NAME, "text")))
     _human_wait(0.5, 1.5)
-    _paste_text(el, X_USERNAME)
+    _human_type(el, X_USERNAME)
     el.send_keys(Keys.RETURN)
     _human_wait(2, 4)
 
@@ -81,7 +78,7 @@ def _login(driver: webdriver.Firefox, wait: WebDriverWait):
         if extra and extra[0].is_displayed():
             logger.info("追加確認ステップを検出...")
             extra[0].clear()
-            _paste_text(extra[0], X_USERNAME)
+            _human_type(extra[0], X_USERNAME)
             extra[0].send_keys(Keys.RETURN)
             _human_wait(2, 4)
     except Exception:
@@ -89,7 +86,7 @@ def _login(driver: webdriver.Firefox, wait: WebDriverWait):
 
     pw = wait.until(EC.element_to_be_clickable((By.NAME, "password")))
     _human_wait(0.5, 1.5)
-    _paste_text(pw, X_PASSWORD)
+    _human_type(pw, X_PASSWORD)
     pw.send_keys(Keys.RETURN)
     _human_wait(4, 7)
 
@@ -100,6 +97,7 @@ def _login(driver: webdriver.Firefox, wait: WebDriverWait):
 
 def _do_post(driver: webdriver.Firefox, wait: WebDriverWait, text: str):
     """実際の投稿処理（共通）"""
+    # ホームをしばらくスクロールして眺める
     logger.info("ホームを閲覧中...")
     _human_scroll(driver, times=random.randint(2, 4))
     _human_wait(2, 5)
@@ -122,11 +120,13 @@ def _do_post(driver: webdriver.Firefox, wait: WebDriverWait, text: str):
     if tweet_box is None:
         raise RuntimeError("ツイート入力欄が見つかりませんでした")
 
+    # スクロールして入力欄を画面内に収めてからクリック
     driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", tweet_box)
     _human_wait(0.5, 1.0)
-    # クリップボードからペースト
-    _paste_text(tweet_box, text)
+    driver.execute_script("arguments[0].click();", tweet_box)
     _human_wait(1, 2)
+    _human_type(tweet_box, text)
+    _human_wait(1, 3)
 
     post_button = wait.until(
         EC.presence_of_element_located(
@@ -168,7 +168,10 @@ def post_tweet_with_link(text: str, url: str):
 
 
 def post_tweet_with_images(text: str, image_paths: list[str]):
-    """画像付きツイートを投稿する（最大4枚）"""
+    """
+    画像付きツイートを投稿する
+    image_paths: ローカルの画像ファイルパスのリスト（最大4枚）
+    """
     driver = _build_driver()
     wait = WebDriverWait(driver, 30)
 
@@ -205,10 +208,11 @@ def post_tweet_with_images(text: str, image_paths: list[str]):
         if tweet_box is None:
             raise RuntimeError("ツイート入力欄が見つかりませんでした")
 
-        # 画像アップロード
+        # 画像をアップロード（ファイル選択input経由）
         for i, image_path in enumerate(image_paths[:4]):
             if not os.path.exists(image_path):
                 raise FileNotFoundError(f"画像ファイルが見つかりません: {image_path}")
+
             file_input = wait.until(
                 EC.presence_of_element_located(
                     (By.CSS_SELECTOR, 'input[data-testid="fileInput"]')
@@ -216,14 +220,17 @@ def post_tweet_with_images(text: str, image_paths: list[str]):
             )
             file_input.send_keys(os.path.abspath(image_path))
             logger.info(f"画像アップロード ({i+1}/{len(image_paths)}): {image_path}")
-            _human_wait(2, 4)
+            _human_wait(2, 4)  # アップロード完了を待つ
 
-        # テキストをクリップボードからペースト
+        # テキスト入力
         driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", tweet_box)
         _human_wait(0.5, 1.0)
-        _paste_text(tweet_box, text)
+        driver.execute_script("arguments[0].click();", tweet_box)
         _human_wait(1, 2)
+        _human_type(tweet_box, text)
+        _human_wait(1, 3)
 
+        # 投稿ボタン
         post_button = wait.until(
             EC.presence_of_element_located(
                 (By.CSS_SELECTOR, '[data-testid="tweetButtonInline"]')
@@ -233,6 +240,7 @@ def post_tweet_with_images(text: str, image_paths: list[str]):
         _human_wait(0.5, 1.5)
         driver.execute_script("arguments[0].click();", post_button)
         _human_wait(3, 6)
+
         logger.info("✅ 画像付きツイートを投稿しました")
 
     finally:
@@ -240,111 +248,3 @@ def post_tweet_with_images(text: str, image_paths: list[str]):
         driver.quit()
 
 
-def get_random_tweet_id(max_scroll: int = 3) -> str | None:
-    """
-    ホームのタイムラインからランダムにツイートIDを1件取得する
-    """
-    driver = _build_driver()
-    wait = WebDriverWait(driver, 30)
-    tweet_id = None
-
-    try:
-        driver.get("https://x.com/home")
-        _human_wait(4, 7)
-
-        if "login" in driver.current_url or "flow" in driver.current_url:
-            if not X_USERNAME or not X_PASSWORD:
-                raise ValueError("X_USERNAME / X_PASSWORD が .env に設定されていません")
-            _login(driver, wait)
-            driver.get("https://x.com/home")
-            _human_wait(4, 7)
-
-        # スクロールしてツイートを複数読み込む
-        _human_scroll(driver, times=max_scroll)
-        _human_wait(1, 2)
-
-        # タイムライン上のツイートリンクを取得
-        links = driver.find_elements(
-            By.CSS_SELECTOR, 'a[href*="/status/"]'
-        )
-        ids = []
-        for link in links:
-            href = link.get_attribute("href") or ""
-            parts = href.split("/status/")
-            if len(parts) == 2:
-                tid = parts[1].split("/")[0].split("?")[0]
-                if tid.isdigit():
-                    ids.append(tid)
-
-        if ids:
-            tweet_id = random.choice(list(set(ids)))
-            logger.info(f"リプライ先ツイートID: {tweet_id}")
-
-    except Exception as e:
-        logger.warning(f"ツイートID取得失敗: {e}")
-    finally:
-        driver.quit()
-
-    return tweet_id
-
-
-def post_reply(text: str, reply_to_id: str):
-    """
-    指定したツイートIDへのリプライを投稿する
-    """
-    driver = _build_driver()
-    wait = WebDriverWait(driver, 30)
-
-    try:
-        driver.get("https://x.com/home")
-        _human_wait(4, 7)
-
-        if "login" in driver.current_url or "flow" in driver.current_url:
-            if not X_USERNAME or not X_PASSWORD:
-                raise ValueError("X_USERNAME / X_PASSWORD が .env に設定されていません")
-            _login(driver, wait)
-            driver.get("https://x.com/home")
-            _human_wait(4, 7)
-
-        # ツイートの詳細ページへ
-        driver.get(f"https://x.com/i/status/{reply_to_id}")
-        _human_wait(4, 7)
-
-        logger.info("リプライ入力欄を探しています...")
-        tweet_box = None
-        for sel in [
-            '[data-testid="tweetTextarea_0"]',
-            '[aria-label="リプライを投稿"]',
-            '[aria-label="Post your reply"]',
-            'div[role="textbox"]',
-        ]:
-            try:
-                tweet_box = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, sel)))
-                logger.info(f"リプライ入力欄を発見: {sel}")
-                break
-            except Exception:
-                continue
-
-        if tweet_box is None:
-            raise RuntimeError("リプライ入力欄が見つかりませんでした")
-
-        driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", tweet_box)
-        _human_wait(0.5, 1.0)
-        _paste_text(tweet_box, text)
-        _human_wait(1, 2)
-
-        # 「リプライする」ボタン
-        post_button = wait.until(
-            EC.presence_of_element_located(
-                (By.CSS_SELECTOR, '[data-testid="tweetButtonInline"]')
-            )
-        )
-        driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", post_button)
-        _human_wait(0.5, 1.5)
-        driver.execute_script("arguments[0].click();", post_button)
-        _human_wait(3, 6)
-        logger.info(f"✅ リプライを投稿しました（→ {reply_to_id}）")
-
-    finally:
-        _human_wait(1, 3)
-        driver.quit()

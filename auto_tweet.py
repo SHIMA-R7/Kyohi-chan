@@ -18,7 +18,7 @@ from tweet_generator import (
     generate_eru_tweet,
     generate_neta_tweet,
 )
-from x_poster import post_tweet, post_tweet_with_link, post_tweet_with_images, get_random_tweet_id, post_reply
+from x_poster import post_tweet, post_tweet_with_link, post_tweet_with_images
 
 logging.basicConfig(
     level=logging.INFO,
@@ -148,12 +148,12 @@ def job():
     # 記念日チェック
     memorial_name, memorial_desc = get_memorial_day()
 
-    # 優先度: 記念日 > ニュース/季節/一般
+    # 優先度: 記念日 > ニュース > 季節(1/5) > 一般
     if memorial_name:
         mode = f"記念日（{memorial_name}）"
     elif _use_news_next:
         mode = "ニュース"
-    elif _tweet_count % 30 == 0:
+    elif random.random() < 0.2:
         mode = "季節"
     else:
         mode = "一般"
@@ -176,7 +176,7 @@ def job():
         else:
             tweet_text = generate_general_tweet()
             logger.info(f"生成ツイート:\n{tweet_text}")
-            _post_or_reply(tweet_text)
+            _safe_post(post_tweet, tweet_text)
         logger.info("✅ 投稿成功！")
         _use_news_next = not _use_news_next
     except Exception as e:
@@ -215,16 +215,6 @@ def neta_job():
     _reschedule()
 
 
-def _post_or_reply(tweet_text: str, reply_chance: float = 0.15):
-    """15%の確率でタイムラインのランダムツイートにリプライ、それ以外は通常投稿"""
-    if random.random() < reply_chance:
-        logger.info("🎲 リプライモード発動！タイムラインからツイートを取得中...")
-        tweet_id = get_random_tweet_id()
-        if tweet_id:
-            _safe_post(post_reply, tweet_text, tweet_id)
-            return
-        logger.warning("ツイートID取得失敗 → 通常投稿にフォールバック")
-    _safe_post(post_tweet, tweet_text)
 
 
 def _reschedule():
@@ -345,24 +335,9 @@ def repost_job():
 
             tweet_id   = tweet.get("id_str", tweet.get("id", ""))
             raw_text   = tweet.get("full_text", tweet.get("text", ""))
+            original_url = f"https://x.com/i/web/status/{tweet_id}"
+            tweet_text = f"【L³ポスト復刻】{_clean_text(raw_text)}\n{original_url}"
             likes      = tweet.get("favorite_count", "?")
-
-            # 引用RTの元ツイートURLを抽出（entities.urlsの展開先から）
-            quoted_url = None
-            urls = tweet.get("entities", {}).get("urls", [])
-            for u in urls:
-                expanded = u.get("expanded_url", "")
-                if "/status/" in expanded and "twitter.com" in expanded or "x.com" in expanded:
-                    # 自分自身のツイートURLでなければ引用元とみなす
-                    if tweet_id not in expanded:
-                        quoted_url = expanded
-                        break
-
-            base_text = _clean_text(raw_text)
-            if quoted_url:
-                tweet_text = f"{base_text} #復刻\n{quoted_url}"
-            else:
-                tweet_text = f"{base_text} #復刻"
 
             if _has_media(tweet):
                 image_paths = _get_image_paths(tweet)

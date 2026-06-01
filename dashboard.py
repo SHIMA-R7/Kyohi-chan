@@ -13,12 +13,13 @@ import json
 import asyncio
 import threading
 import logging
+import secrets
 from datetime import datetime
 from pathlib import Path
 from typing import Set
 
 import uvicorn
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -29,6 +30,7 @@ load_dotenv()
 # ── 設定 ──────────────────────────────
 DASHBOARD_PORT  = int(os.getenv("DASHBOARD_PORT", "8000"))
 NGROK_AUTH_TOKEN = os.getenv("NGROK_AUTH_TOKEN", "")  # ngrokトークン（任意）
+DASHBOARD_ADMIN_TOKEN = os.getenv("DASHBOARD_ADMIN_TOKEN", "")
 LOG_FILE        = Path(os.path.expanduser("~")) / "Documents" / "tweet_log.txt"
 POSTED_LOG      = Path("reposted.json")
 ERU_COUNT_LOG   = Path("eru_count.json")
@@ -38,12 +40,33 @@ app = FastAPI(title="Bot管理画面")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 logger = logging.getLogger(__name__)
+post_lock = threading.Lock()
 
 # WebSocket接続管理
 connected_clients: Set[WebSocket] = set()
 
 # Bot状態管理（auto_tweet.pyと共有するためにファイルベース）
 STATE_FILE = Path("bot_state.json")
+
+def require_admin(request: Request):
+    if not DASHBOARD_ADMIN_TOKEN:
+        if NGROK_AUTH_TOKEN:
+            raise HTTPException(
+                status_code=500,
+                detail="DASHBOARD_ADMIN_TOKEN is required when ngrok is enabled",
+            )
+        return
+
+    auth = request.headers.get("authorization", "")
+    bearer = auth[7:] if auth.lower().startswith("bearer ") else ""
+    token = (
+        request.headers.get("x-dashboard-token")
+        or bearer
+        or request.query_params.get("token")
+        or ""
+    )
+    if not secrets.compare_digest(token, DASHBOARD_ADMIN_TOKEN):
+        raise HTTPException(status_code=401, detail="admin token is required")
 
 def read_state() -> dict:
     if STATE_FILE.exists():
@@ -118,7 +141,8 @@ def get_logs(n: int = 200):
     return {"logs": read_log_tail(n)}
 
 @app.post("/api/pause")
-def pause_bot():
+def pause_bot(request: Request):
+    require_admin(request)
     state = read_state()
     state["paused"] = True
     write_state(state)
@@ -126,7 +150,8 @@ def pause_bot():
     return {"ok": True, "paused": True}
 
 @app.post("/api/resume")
-def resume_bot():
+def resume_bot(request: Request):
+    require_admin(request)
     state = read_state()
     state["paused"] = False
     write_state(state)
@@ -134,8 +159,9 @@ def resume_bot():
     return {"ok": True, "paused": False}
 
 @app.post("/api/post")
-def manual_post(req: TweetRequest):
+def manual_post(req: TweetRequest, request: Request):
     """手動テスト投稿"""
+    require_admin(request)
     import importlib, sys
     try:
         # tweet_generatorを動的インポート
@@ -163,13 +189,22 @@ def manual_post(req: TweetRequest):
         else:
             text = tg.generate_general_tweet()
 
+        acquired = post_lock.acquire(blocking=False)
+        if not acquired:
+            raise HTTPException(status_code=409, detail="another post is already running")
+
         # 別スレッドで投稿（ブロッキング回避）
         def _post():
-            xp.post_tweet(text)
-            logger.info(f"[手動投稿] {text}")
+            try:
+                xp.post_tweet(text)
+                logger.info(f"[手動投稿] {text}")
+            finally:
+                post_lock.release()
         threading.Thread(target=_post, daemon=True).start()
 
         return {"ok": True, "text": text}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -534,14 +569,22 @@ function setPaused(paused) {
   document.getElementById('btn-resume').disabled = !paused;
 }
 
+const urlToken = new URLSearchParams(location.search).get('token');
+if (urlToken) localStorage.setItem('dashboardAdminToken', urlToken);
+const adminToken = localStorage.getItem('dashboardAdminToken') || '';
+
+function authHeaders(extra={}) {
+  return adminToken ? {...extra, 'X-Dashboard-Token': adminToken} : extra;
+}
+
 async function pauseBot() {
-  await fetch('/api/pause', {method:'POST'});
+  await fetch('/api/pause', {method:'POST', headers: authHeaders()});
   setPaused(true);
   showToast('一時停止しました');
 }
 
 async function resumeBot() {
-  await fetch('/api/resume', {method:'POST'});
+  await fetch('/api/resume', {method:'POST', headers: authHeaders()});
   setPaused(false);
   showToast('再開しました', true);
 }
@@ -553,7 +596,7 @@ async function manualPost() {
   try {
     const res = await fetch('/api/post', {
       method: 'POST',
-      headers: {'Content-Type':'application/json'},
+      headers: authHeaders({'Content-Type':'application/json'}),
       body: JSON.stringify({text, mode})
     });
     const data = await res.json();

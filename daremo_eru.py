@@ -21,6 +21,7 @@ import json
 import sqlite3
 import asyncio
 import hashlib
+import secrets
 import threading
 import time
 import random
@@ -55,6 +56,11 @@ POST_INTERVAL_MIN  = int(os.getenv("DAREMO_INTERVAL", "30"))
 DB_PATH            = Path(__file__).parent / "daremo_eru.db"
 BASE_DIR           = Path(__file__).parent
 # ──────────────────────────────────────────────────────
+
+if ADMIN_PASSWORD == "changeme":
+    raise RuntimeError("DAREMO_ADMIN_PASSWORD must be set to a non-default value")
+if SECRET_KEY == "change-this-secret":
+    raise RuntimeError("DAREMO_SECRET_KEY must be set to a non-default value")
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
@@ -175,6 +181,26 @@ def get_queue(limit: int = 50) -> list[dict]:
          "status": r[4], "created_at": r[5], "posted_at": r[6]}
         for r in rows
     ]
+
+
+def claim_post(post_id: int | None = None) -> tuple[int, str] | None:
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        if post_id is None:
+            row = conn.execute(
+                "SELECT id, text FROM posts WHERE status='pending' ORDER BY id ASC LIMIT 1"
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT id, text FROM posts WHERE id=? AND status='pending'",
+                (post_id,)
+            ).fetchone()
+        if not row:
+            conn.rollback()
+            return None
+        conn.execute("UPDATE posts SET status='posting' WHERE id=?", (row[0],))
+        conn.commit()
+        return row[0], row[1]
 
 
 # ── WebSocket ─────────────────────────────────────────
@@ -314,8 +340,10 @@ def api_queue():
 
 @app.post("/api/admin")
 async def admin_action(req: AdminAction):
-    if hashlib.sha256(req.password.encode()).hexdigest() != \
-       hashlib.sha256(ADMIN_PASSWORD.encode()).hexdigest():
+    if not secrets.compare_digest(
+        hashlib.sha256(req.password.encode()).hexdigest(),
+        hashlib.sha256(ADMIN_PASSWORD.encode()).hexdigest(),
+    ):
         raise HTTPException(status_code=403, detail="パスワードが違います")
 
     if req.action == "get_queue":
@@ -333,13 +361,10 @@ async def admin_action(req: AdminAction):
         return {"ok": True}
 
     elif req.action == "force_post" and req.post_id:
-        with sqlite3.connect(DB_PATH) as conn:
-            row = conn.execute(
-                "SELECT text FROM posts WHERE id=? AND status='pending'", (req.post_id,)
-            ).fetchone()
-        if not row:
+        claimed = claim_post(req.post_id)
+        if not claimed:
             raise HTTPException(status_code=404, detail="投稿が見つかりません")
-        threading.Thread(target=_post_now, args=(req.post_id, row[0]), daemon=True).start()
+        threading.Thread(target=_post_now, args=claimed, daemon=True).start()
         return {"ok": True}
 
     raise HTTPException(status_code=400, detail="不明なアクション")
@@ -371,13 +396,10 @@ def _post_now(post_id: int, text: str):
 def auto_post_loop():
     while True:
         time.sleep(POST_INTERVAL_MIN * 60 + random.randint(-300, 300))
-        with sqlite3.connect(DB_PATH) as conn:
-            row = conn.execute(
-                "SELECT id, text FROM posts WHERE status='pending' ORDER BY id ASC LIMIT 1"
-            ).fetchone()
-        if row:
-            logger.info(f"[自動投稿] id:{row[0]}")
-            _post_now(row[0], row[1])
+        claimed = claim_post()
+        if claimed:
+            logger.info(f"[自動投稿] id:{claimed[0]}")
+            _post_now(*claimed)
 
 
 # ── lifespan ──────────────────────────────────────────
